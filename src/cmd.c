@@ -122,29 +122,62 @@ static int parse_simple(simple_command_t *s, int level, command_t *father)
             free(in_file);
         }
 
-        if (s->out != NULL) {
-            char *out_file = get_word(s->out);
-            int flags = O_WRONLY | O_CREAT | ((s->io_flags & IO_OUT_APPEND) ? O_APPEND : O_TRUNC);
-            int fd_out = open(out_file, flags, 0644);
-            if (fd_out < 0) {
-                perror("open");
-                exit(EXIT_FAILURE);
-            }
-            dup2(fd_out, STDOUT_FILENO);
-            close(fd_out);
-            free(out_file);
-        }
+        // Handle output and error redirection
+        if (s->out != NULL || s->err != NULL) {
+            int fd;
+            char *out_file = NULL;
+            char *err_file = NULL;
+            bool out_err_same = false;
 
-        if (s->err != NULL) {
-            char *err_file = get_word(s->err);
-            int flags = O_WRONLY | O_CREAT | ((s->io_flags & IO_ERR_APPEND) ? O_APPEND : O_TRUNC);
-            int fd_err = open(err_file, flags, 0644);
-            if (fd_err < 0) {
-                perror("open");
-                exit(EXIT_FAILURE);
+            if (s->out != NULL) {
+                out_file = get_word(s->out);
             }
-            dup2(fd_err, STDERR_FILENO);
-            close(fd_err);
+            if (s->err != NULL) {
+                err_file = get_word(s->err);
+            }
+
+            // Check if out and err redirect to the same file
+            if (out_file != NULL && err_file != NULL && strcmp(out_file, err_file) == 0) {
+                out_err_same = true;
+            }
+
+            if (out_err_same) {
+                int flags = O_WRONLY | O_CREAT | ((s->io_flags & (IO_OUT_APPEND | IO_ERR_APPEND)) ? O_APPEND : O_TRUNC);
+                fd = open(out_file, flags, 0644);
+                if (fd < 0) {
+                    perror("open");
+                    exit(EXIT_FAILURE);
+                }
+                dup2(fd, STDOUT_FILENO);
+                dup2(fd, STDERR_FILENO);
+                close(fd);
+            } else {
+                // Handle output redirection
+                if (out_file != NULL) {
+                    int flags = O_WRONLY | O_CREAT | ((s->io_flags & IO_OUT_APPEND) ? O_APPEND : O_TRUNC);
+                    fd = open(out_file, flags, 0644);
+                    if (fd < 0) {
+                        perror("open");
+                        exit(EXIT_FAILURE);
+                    }
+                    dup2(fd, STDOUT_FILENO);
+                    close(fd);
+                }
+
+                // Handle error redirection
+                if (err_file != NULL) {
+                    int flags = O_WRONLY | O_CREAT | ((s->io_flags & IO_ERR_APPEND) ? O_APPEND : O_TRUNC);
+                    fd = open(err_file, flags, 0644);
+                    if (fd < 0) {
+                        perror("open");
+                        exit(EXIT_FAILURE);
+                    }
+                    dup2(fd, STDERR_FILENO);
+                    close(fd);
+                }
+            }
+
+            free(out_file);
             free(err_file);
         }
 
@@ -270,6 +303,8 @@ int parse_command(command_t *c, int level, command_t *father)
     if (c == NULL)
         return EXIT_FAILURE;
 
+    int ret1 = 0, ret2 = 0;
+
     if (c->op == OP_NONE) {
         /* Execute a simple command. */
         return parse_simple(c->scmd, level + 1, c);
@@ -278,31 +313,39 @@ int parse_command(command_t *c, int level, command_t *father)
     switch (c->op) {
     case OP_SEQUENTIAL:
         /* Execute the commands one after the other. */
-        parse_command(c->cmd1, level + 1, c);
-        parse_command(c->cmd2, level + 1, c);
-        break;
+        ret1 = parse_command(c->cmd1, level + 1, c);
+        ret2 = parse_command(c->cmd2, level + 1, c);
+        return ret2;
 
     case OP_PARALLEL:
         /* Execute the commands simultaneously. */
-        run_in_parallel(c->cmd1, c->cmd2, level + 1, c);
-        break;
+        if (!run_in_parallel(c->cmd1, c->cmd2, level + 1, c))
+            return EXIT_FAILURE;
+        return EXIT_SUCCESS;
 
     case OP_CONDITIONAL_NZERO:
-        /* Execute the second command only if the first one returns non zero. */
-        if (parse_command(c->cmd1, level + 1, c) != 0)
-            parse_command(c->cmd2, level + 1, c);
-        break;
+        /* Execute the second command only if the first one returns non-zero. */
+        ret1 = parse_command(c->cmd1, level + 1, c);
+        if (ret1 != 0)
+            ret2 = parse_command(c->cmd2, level + 1, c);
+        else
+            ret2 = ret1;
+        return ret2;
 
     case OP_CONDITIONAL_ZERO:
         /* Execute the second command only if the first one returns zero. */
-        if (parse_command(c->cmd1, level + 1, c) == 0)
-            parse_command(c->cmd2, level + 1, c);
-        break;
+        ret1 = parse_command(c->cmd1, level + 1, c);
+        if (ret1 == 0)
+            ret2 = parse_command(c->cmd2, level + 1, c);
+        else
+            ret2 = ret1;
+        return ret2;
 
     case OP_PIPE:
         /* Redirect the output of the first command to the input of the second. */
-        run_on_pipe(c->cmd1, c->cmd2, level + 1, c);
-        break;
+        if (!run_on_pipe(c->cmd1, c->cmd2, level + 1, c))
+            return EXIT_FAILURE;
+        return EXIT_SUCCESS;
 
     default:
         return SHELL_EXIT;
