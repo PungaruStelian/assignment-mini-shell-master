@@ -80,12 +80,103 @@ static int parse_simple(simple_command_t *s, int level, command_t *father)
     if (command == NULL)
         return EXIT_FAILURE;
 
+    /* Save original file descriptors */
+    int saved_stdin = dup(STDIN_FILENO);
+    int saved_stdout = dup(STDOUT_FILENO);
+    int saved_stderr = dup(STDERR_FILENO);
+
+    /* Perform redirections */
+    if (s->in != NULL) {
+        char *in_file = get_word(s->in);
+        int fd_in = open(in_file, O_RDONLY);
+        if (fd_in < 0) {
+            perror("open");
+            exit(EXIT_FAILURE);
+        }
+        dup2(fd_in, STDIN_FILENO);
+        close(fd_in);
+        free(in_file);
+    }
+
+    if (s->out != NULL || s->err != NULL) {
+        // Handle output and error redirection
+        int fd;
+        char *out_file = NULL;
+        char *err_file = NULL;
+        bool out_err_same = false;
+
+        if (s->out != NULL) {
+            out_file = get_word(s->out);
+        }
+        if (s->err != NULL) {
+            err_file = get_word(s->err);
+        }
+
+        // Check if out and err redirect to the same file
+        if (out_file != NULL && err_file != NULL && strcmp(out_file, err_file) == 0) {
+            out_err_same = true;
+        }
+
+        if (out_err_same) {
+            int flags = O_WRONLY | O_CREAT | ((s->io_flags & (IO_OUT_APPEND | IO_ERR_APPEND)) ? O_APPEND : O_TRUNC);
+            fd = open(out_file, flags, 0644);
+            if (fd < 0) {
+                perror("open");
+                exit(EXIT_FAILURE);
+            }
+            dup2(fd, STDOUT_FILENO);
+            dup2(fd, STDERR_FILENO);
+            close(fd);
+        } else {
+            // Handle output redirection
+            if (out_file != NULL) {
+                int flags = O_WRONLY | O_CREAT | ((s->io_flags & IO_OUT_APPEND) ? O_APPEND : O_TRUNC);
+                fd = open(out_file, flags, 0644);
+                if (fd < 0) {
+                    perror("open");
+                    exit(EXIT_FAILURE);
+                }
+                dup2(fd, STDOUT_FILENO);
+                close(fd);
+            }
+
+            // Handle error redirection
+            if (err_file != NULL) {
+                int flags = O_WRONLY | O_CREAT | ((s->io_flags & IO_ERR_APPEND) ? O_APPEND : O_TRUNC);
+                fd = open(err_file, flags, 0644);
+                if (fd < 0) {
+                    perror("open");
+                    exit(EXIT_FAILURE);
+                }
+                dup2(fd, STDERR_FILENO);
+                close(fd);
+            }
+        }
+
+        free(out_file);
+        free(err_file);
+    }
+
     /* If builtin command, execute the command. */
     if (strcmp(command, "cd") == 0) {
         int ret = shell_cd(s->params);
+        /* Restore original file descriptors */
+        dup2(saved_stdin, STDIN_FILENO);
+        dup2(saved_stdout, STDOUT_FILENO);
+        dup2(saved_stderr, STDERR_FILENO);
+        close(saved_stdin);
+        close(saved_stdout);
+        close(saved_stderr);
         free(command);
         return ret ? EXIT_SUCCESS : EXIT_FAILURE;
     } else if (strcmp(command, "exit") == 0 || strcmp(command, "quit") == 0) {
+        /* Restore original file descriptors */
+        dup2(saved_stdin, STDIN_FILENO);
+        dup2(saved_stdout, STDOUT_FILENO);
+        dup2(saved_stderr, STDERR_FILENO);
+        close(saved_stdin);
+        close(saved_stdout);
+        close(saved_stderr);
         free(command);
         return shell_exit();
     }
@@ -96,6 +187,13 @@ static int parse_simple(simple_command_t *s, int level, command_t *father)
         *equal_sign = '\0';
         char *value = equal_sign + 1;
         int ret = setenv(command, value, 1);
+        /* Restore original file descriptors */
+        dup2(saved_stdin, STDIN_FILENO);
+        dup2(saved_stdout, STDOUT_FILENO);
+        dup2(saved_stderr, STDERR_FILENO);
+        close(saved_stdin);
+        close(saved_stdout);
+        close(saved_stderr);
         free(command);
         return ret == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
@@ -187,7 +285,8 @@ static int parse_simple(simple_command_t *s, int level, command_t *father)
 
         /* Load executable in child */
         execvp(argv[0], argv);
-        perror("execvp");
+        // If execvp returns, an error occurred
+        fprintf(stderr, "Execution failed for '%s'\n", argv[0]);
         /* Free memory */
         for (int i = 0; i < argc; i++)
             free(argv[i]);
@@ -199,6 +298,13 @@ static int parse_simple(simple_command_t *s, int level, command_t *father)
         /* Wait for child */
         int status;
         waitpid(pid, &status, 0);
+        /* Restore original file descriptors */
+        dup2(saved_stdin, STDIN_FILENO);
+        dup2(saved_stdout, STDOUT_FILENO);
+        dup2(saved_stderr, STDERR_FILENO);
+        close(saved_stdin);
+        close(saved_stdout);
+        close(saved_stderr);
         free(command);
         /* Return exit status */
         if (WIFEXITED(status))
