@@ -53,7 +53,7 @@ int parse_simple(simple_command_t *s, int level, command_t *father)
 	int saved_stdout = dup(STDOUT_FILENO);
 	int saved_stderr = dup(STDERR_FILENO);
 
-	/* Perform redirections */
+	// Handle input redirection
 	if (s->in) {
 		char *in_file = get_word(s->in);
 		int fd_in = open(in_file, O_RDONLY);
@@ -88,8 +88,10 @@ int parse_simple(simple_command_t *s, int level, command_t *father)
 			int flags = O_WRONLY | O_CREAT;
 
 			if (s->io_flags & (IO_OUT_APPEND | IO_ERR_APPEND))
+				// write at the end of the file
 				flags |= O_APPEND;
 			else
+				// delete the content of the file before writing
 				flags |= O_TRUNC;
 			fd = open(out_file, flags, 0644);
 
@@ -106,8 +108,10 @@ int parse_simple(simple_command_t *s, int level, command_t *father)
 				int flags = O_WRONLY | O_CREAT;
 
 				if (s->io_flags & IO_OUT_APPEND)
+					// write at the end of the file
 					flags |= O_APPEND;
 				else
+					// delete the content of the file before writing
 					flags |= O_TRUNC;
 				fd = open(out_file, flags, 0644);
 				if (fd < 0) {
@@ -202,6 +206,7 @@ int parse_simple(simple_command_t *s, int level, command_t *father)
 		return EXIT_FAILURE;
 	}
 
+    // child process is successful
 	if (!pid) {
 		/* Perform redirections in child */
 		if (s->in) {
@@ -332,6 +337,7 @@ int parse_simple(simple_command_t *s, int level, command_t *father)
 bool run_in_parallel(command_t *cmd1, command_t *cmd2, int level,
 							command_t *father)
 {
+    // create process 1
 	pid_t pid1 = fork();
 
 	if (pid1 < 0) {
@@ -342,6 +348,7 @@ bool run_in_parallel(command_t *cmd1, command_t *cmd2, int level,
 	if (!pid1)
 		exit(parse_command(cmd1, level + 1, father));
 
+    // create process 2
 	pid_t pid2 = fork();
 
 	if (pid2 < 0) {
@@ -354,6 +361,7 @@ bool run_in_parallel(command_t *cmd1, command_t *cmd2, int level,
 
 	int status1, status2;
 
+    // wait for both processes to finish
 	waitpid(pid1, &status1, 0);
 	waitpid(pid2, &status2, 0);
 
@@ -372,6 +380,7 @@ int run_on_pipe(command_t *cmd1, command_t *cmd2, int level,
 		return EXIT_FAILURE;
 	}
 
+    // create process 1
 	pid1 = fork();
 	if (pid1 < 0) {
 		perror("fork");
@@ -379,13 +388,14 @@ int run_on_pipe(command_t *cmd1, command_t *cmd2, int level,
 	}
 
 	if (!pid1) {
-		/* Child process for cmd1 */
 		close(pipefd[READ]);
+		// output of cmd1 is redirected to the write end of the pipe
 		dup2(pipefd[WRITE], STDOUT_FILENO);
 		close(pipefd[WRITE]);
 		exit(parse_command(cmd1, level + 1, father));
 	}
 
+    // create process 2
 	pid2 = fork();
 	if (pid2 < 0) {
 		perror("fork");
@@ -393,8 +403,8 @@ int run_on_pipe(command_t *cmd1, command_t *cmd2, int level,
 	}
 
 	if (!pid2) {
-		/* Child process for cmd2 */
 		close(pipefd[WRITE]);
+		// input of cmd2 is redirected to the read end of the pipe
 		dup2(pipefd[READ], STDIN_FILENO);
 		close(pipefd[READ]);
 		exit(parse_command(cmd2, level + 1, father));
@@ -403,14 +413,27 @@ int run_on_pipe(command_t *cmd1, command_t *cmd2, int level,
 	close(pipefd[READ]);
 	close(pipefd[WRITE]);
 
+    // wait for both processes to finish
 	waitpid(pid1, &status1, 0);
 	waitpid(pid2, &status2, 0);
 
-	/* Returnează codul de ieșire al ultimei comenzi din pipeline */
+	// if cmd1 or cmd2 did not terminate normally, return EXIT_FAILURE
+	if (!WIFEXITED(status1) || !WIFEXITED(status2))
+		return EXIT_FAILURE;
+
+	if (WIFEXITED(status1) && WIFEXITED(status2))
+		return WEXITSTATUS(status2);
+
+    // If only cmd1 finished normally, we return status1
+	if (WIFEXITED(status1))
+		return WEXITSTATUS(status1);
+
+    // If only cmd2 finished normally, we return status2
 	if (WIFEXITED(status2))
 		return WEXITSTATUS(status2);
-	else
-		return EXIT_FAILURE;
+
+    // should not be reached here normally
+	return EXIT_FAILURE;
 }
 
 int parse_command(command_t *c, int level, command_t *father)

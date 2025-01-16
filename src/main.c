@@ -40,9 +40,10 @@ static char *read_line(void)
 		chunk_length = strlen(chunk);
 		if (chunk[chunk_length - 1] == '\n') {
 			if (chunk_length > 1 && chunk[chunk_length - 2] == '\r')
-				/* Windows */
+				// Windows-style newline ("\r\n")
 				chunk[chunk_length - 2] = 0;
 			else
+				// Unix-style newline ("\n")
 				chunk[chunk_length - 1] = 0;
 			endline = 1;
 		}
@@ -50,7 +51,6 @@ static char *read_line(void)
 		line = realloc(line, line_length + CHUNK_SIZE);
 		DIE(line == NULL, "Error allocating command line");
 
-		line[line_length] = '\0';
 		strcat(line, chunk);
 
 		line_length += CHUNK_SIZE;
@@ -68,6 +68,7 @@ static void start_shell(void)
 
 	for (;;) {
 		printf(PROMPT);
+		// forces the prompt to be written to the terminal
 		fflush(stdout);
 		ret = 0;
 
@@ -75,6 +76,7 @@ static void start_shell(void)
 		line = read_line();
 		if (line == NULL)
 			return;
+
 		parse_line(line, &root);
 
 		if (root != NULL)

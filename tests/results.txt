@@ -1,6 +1,0 @@
-01) Testing commands without arguments......................passed  [03/100]
-02) Testing commands with arguments.........................passed  [02/100]
-03) Testing simple redirect operators.......................passed  [05/100]
-04) Testing append redirect operators.......................passed  [05/100]
-05) Testing current directory...............................passed  [05/100]
-06) Testing conditional operators...........................
